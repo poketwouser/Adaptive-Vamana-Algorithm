@@ -232,5 +232,4 @@ single-thread latency, recall verified against the same engine).
   latency at identical recall**, verified bit-for-bit against the original via an
   equivalence-test harness measuring Recall@10/@100, P95/P99, and throughput.
 
-> Pick 3–4 depending on the role: #1 = systems/scale, #2 = algorithms, #3 = experimentation/
-> rigor, #4 = low-level optimization.
+
