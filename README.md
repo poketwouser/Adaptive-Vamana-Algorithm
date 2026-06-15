@@ -57,6 +57,16 @@ Per-node mutexes ensure correctness during parallel construction.
 ### Search Phase
 Greedy beam search starting from a fixed start node, maintaining a candidate set bounded at size `L`. Returns the top-`K` closest points found.
 
+### AdaptiveVamana search variants
+The baseline greedy search above is the foundation; AdaptiveVamana layers three flag-gated improvements on top of it, sharing the same graph traversal. All are exposed through `search_index` (see the [AdaptiveVamana quick start](#adaptivevamana-quick-start)):
+
+- **Fast engine (F0, default)** — same traversal as the baseline, but a flat sorted candidate pool + version-stamped visited buffer replace the original `std::set` (O(L²) frontier scan) and the per-query 1 MB `visited` allocation. Recall is bit-identical; only the data structures change. `--legacy-search` restores the original engine.
+- **K-Means query routing (F1, `--clusters`)** — instead of always starting from the one fixed node, the query is matched to its nearest cluster medoids, which seed the walk close to the answer (fewer hops, no recall loss in *route-only* mode). `--clusters-to-search N` enables IVF restriction; `--route-only` keeps the full graph searchable.
+- **Adaptive beam (F3, `--adaptive`)** — the beam width is chosen per query: the walk stops once the K-th-neighbor distance stops improving (within `--epsilon` for `--patience` expansions), bounded by `--min-beam`/`--max-beam`. Easy queries finish early; hard queries run longer.
+- **Final system (`--final`)** — combines routing (F1) + adaptive beam (F3), typically on a graph that has been edge-refined (F4) via `refine_index`.
+
+See `docs/REPORT.md` for the algorithms, complexity analysis, and the ablated features (F2/F5/F6).
+
 ### Parameters
 | Parameter | Typical Range | Description |
 |-----------|--------------|-------------|
@@ -75,10 +85,16 @@ Greedy beam search starting from a fixed start node, maintaining a candidate set
 graphann/
 ├── CMakeLists.txt              # Build config (C++17, OpenMP, -O3 -march=native)
 ├── README.md
+├── download_sift.py            # Standalone SIFT1M downloader (Python)
+├── docs/
+│   ├── REPORT.md               # Technical report: architecture, algorithms, complexity, STAR
+│   ├── BENCHMARKS.md           # All measured result tables
+│   └── PROGRESS.md             # Per-feature change log (rationale + tradeoffs)
 ├── include/
 │   ├── distance.h              # Squared L2 distance function
 │   ├── io_utils.h              # fbin/ibin file loaders
 │   ├── timer.h                 # Simple chrono-based timer
+│   ├── kmeans.h                # K-Means clustering for query routing (Feature 1)
 │   └── vamana_index.h          # VamanaIndex class declaration
 ├── scripts/
 │   ├── convert_vecs.py         # Convert fvecs/ivecs → fbin/ibin
@@ -86,14 +102,19 @@ graphann/
 └── src/
     ├── distance.cpp            # Distance implementation
     ├── io_utils.cpp            # File I/O implementation
-    ├── vamana_index.cpp        # Core: greedy_search, robust_prune, build, search
-    ├── build_index.cpp         # CLI: build index from data
-    └── search_index.cpp        # CLI: search + recall/latency evaluation
+    ├── kmeans.cpp              # K-Means++ init + Lloyd + medoids (Feature 1)
+    ├── vamana_index.cpp        # Core: greedy_search, robust_prune, build, search backends
+    ├── build_index.cpp         # CLI: build Vamana graph from data
+    ├── build_clusters.cpp      # CLI: train offline K-Means clusters (Feature 1)
+    ├── refine_index.cpp        # CLI: workload-aware edge-usage refinement (Feature 4)
+    └── search_index.cpp        # CLI: search + recall/latency evaluation (all search modes)
 ```
 
 ### Key files to study
-- **`src/vamana_index.cpp`** — the core algorithm: `greedy_search()`, `robust_prune()`, `build()`
+- **`src/vamana_index.cpp`** — the core algorithm: `greedy_search()`, `robust_prune()`, `build()`, and the AdaptiveVamana search backends (fast / legacy / adaptive / routed / combined)
 - **`include/vamana_index.h`** — data structures (adjacency list graph, per-node locks)
+- **`src/kmeans.cpp`** / **`include/kmeans.h`** — K-Means routing (centroids + medoids)
+- **`docs/REPORT.md`** — full technical write-up of the AdaptiveVamana enhancements
 
 ---
 
@@ -107,7 +128,11 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j
 ```
 
-This produces two executables: `build_index` and `search_index`.
+This produces four executables:
+- `build_index` — build the Vamana graph from a dataset
+- `search_index` — search + recall/latency evaluation (all search modes)
+- `build_clusters` — train offline K-Means clusters for query routing (Feature 1)
+- `refine_index` — workload-aware edge-usage graph refinement (Feature 4)
 
 ---
 
@@ -188,22 +213,6 @@ Output:
 - **Vectorization**: `-O3 -march=native` auto-vectorizes the L2 distance loop — no manual intrinsics needed
 - **Lock granularity**: Per-node `std::mutex` — threads only contend when updating the *same* node's adjacency list
 - **No external dependencies** beyond OpenMP
-
----
-
-## Some sample things to try, and start the experimenting with!
-
-0. **Code understanding**: Use AI tools to understand the logic of algorithm and how it is a hueristic approximation of what we discussed in class
-
-1. **Beam width experiments**: Try different `L` values during build and measure recall vs build time. What's the sweet spot?
-
-2. **Medoid start node**: Replace the random start node with the *medoid* — the point closest to the centroid of the dataset. How does this affect search recall?
-
-3. **Change the edges in index build**: Run the build twice — second pass starts from the graph produced by the first. How does recall change?
-
-4. **Change the search algorithm**: Plot the histogram of node degrees. Is it uniform? What happens with different `α` values?
-
-5. **Concurrent search optimization**: Replace `std::vector<bool> visited` in `greedy_search()` with a pre-allocated scratch buffer to avoid per-query allocation.
 
 ---
 
