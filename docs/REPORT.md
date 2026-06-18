@@ -232,4 +232,7 @@ single-thread latency, recall verified against the same engine).
   latency at identical recall**, verified bit-for-bit against the original via an
   equivalence-test harness measuring Recall@10/@100, P95/P99, and throughput.
 
+## 9. Presentation Link
+- https://prezi.com/view/BRf3mvjFLtja3cTNuB51/?referral_token=3oEeCQlnB3FN
+
 
